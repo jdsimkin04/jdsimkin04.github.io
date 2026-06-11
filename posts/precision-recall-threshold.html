@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Choosing a threshold is a product decision – Jonathan Simkin</title>
+<meta name="description" content="A model gives you scores; the threshold is where you decide what to do with them. An interactive look at the precision and recall tradeoff, and why champion–challenger comparisons go wrong at the default threshold." />
+<script>(function(){try{var t=localStorage.getItem('theme');if(!t)t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+  html[data-theme="light"] { --chart-green: #1e8a5f; --chart-orange: #c45c25; --chart-gold: #a87f1d; }
+  html[data-theme="dark"]  { --chart-green: #5fc394; --chart-orange: #f09a62; --chart-gold: #e8c466; }
+  .legendrow { display: flex; gap: 20px; flex-wrap: wrap; font-family: var(--mono); font-size: 11.5px; color: var(--ink-soft); margin-bottom: 12px; }
+  .legendrow span { display: inline-flex; align-items: center; gap: 7px; }
+  .swatch { width: 16px; height: 3px; border-radius: 2px; display: inline-block; }
+</style>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="site-header__inner">
+    <a class="brand" href="../index.html">
+      <span class="brand__mono">JS</span>
+      <span class="brand__name">Jonathan Simkin</span>
+    </a>
+    <nav class="nav">
+      <a href="../writing.html">Writing</a>
+      <a href="../resume.html">Resume</a>
+      <button class="theme-toggle" type="button" aria-label="Toggle dark mode">
+        <span class="icon-moon">☾</span>
+        <span class="icon-sun">☀</span>
+      </button>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <article class="article">
+    <header class="article-head">
+      <div class="article-head__meta">
+        <span>June 9, 2026</span>
+        <span>·</span>
+        <span>Applied ML</span>
+        <span>·</span>
+        <span>14 min read</span>
+      </div>
+      <h1>Choosing a threshold is a product decision, not a math problem</h1>
+      <p class="article-head__standfirst">
+        A classifier hands you a score between zero and one. Everything that matters next,
+        who gets flagged, who gets missed, what it costs, happens at the threshold you pick.
+        That choice belongs to the problem, not the model.
+      </p>
+    </header>
+
+    <div class="prose">
+      <p>
+        Most classification models do not output decisions. They output scores. For a binary
+        classifier that is usually a sigmoid or softmax output: a number between zero and one
+        that behaves like a confidence, and that ranks cases from least to most likely to be
+        positive. Calling it a probability flatters most models, since uncalibrated scores
+        drift from true frequencies, but the ranking is real, and it is the part you can use.
+        The model can be excellent at ranking and still be useless in practice, because at
+        some point a human or a system has to draw a line and say <em>this one, act on it;
+        that one, leave it</em>. That line is the threshold, and where you put it is a product
+        and operational decision, not something the training run hands you for free. The 0.5
+        everyone defaults to is just the midpoint of the score scale; nothing about your
+        problem lives there.
+      </p>
+
+      <p>
+        In healthcare and other high-stakes settings, the two kinds of mistake are not
+        symmetric. Missing a real case (a false negative) and chasing a case that is not
+        there (a false positive) carry very different costs, and those costs are about the
+        world, not the loss function. So before tuning anything, it helps to make the
+        tradeoff concrete. Two numbers carry most of the weight:
+      </p>
+
+      <ul>
+        <li><strong>Precision</strong> answers: of the cases we flagged, how many were real? It is the price of acting.</li>
+        <li><strong>Recall</strong> answers: of the real cases, how many did we catch? It is the cost of missing.</li>
+      </ul>
+
+      <p>
+        Raise the threshold and you flag fewer, more confident cases: precision climbs, recall
+        falls. Lower it and you catch more real cases at the cost of more false alarms. You
+        cannot maximize both at once with a single number, so the honest question is not
+        <em>what is the best threshold</em> but <em>which mistake can we better afford</em>.
+      </p>
+
+      <h2>See the tradeoff move</h2>
+
+      <p>
+        Below is a synthetic population of 240 cases. Each one has a model score, and each one
+        is really positive or really negative. Drag the threshold and watch the same model
+        become a cautious one or an aggressive one. Nothing about the model changes; only the
+        line does.
+      </p>
+
+      <!-- ============== Interactive widget (self-contained) ============== -->
+      <div class="widget" id="pr-widget">
+        <p class="widget__cap">Interactive · Precision / recall</p>
+        <p class="widget__title">Move the decision threshold</p>
+
+        <div style="display:flex;gap:20px;flex-wrap:wrap;font-family:var(--mono);font-size:11.5px;color:var(--ink-soft);margin-bottom:12px">
+          <span style="display:inline-flex;align-items:center;gap:7px"><span style="width:11px;height:11px;border-radius:3px;background:var(--accent);display:inline-block"></span>Really positive</span>
+          <span style="display:inline-flex;align-items:center;gap:7px"><span style="width:11px;height:11px;border-radius:3px;background:var(--ink-faint);display:inline-block;opacity:.55"></span>Really negative</span>
+          <span style="display:inline-flex;align-items:center;gap:7px">Everything right of the line is flagged positive</span>
+        </div>
+
+        <div class="widget__canvas-wrap"><canvas id="pr-canvas" height="200"></canvas></div>
+
+        <div class="widget__sliderrow">
+          <label for="pr-thr">THRESHOLD</label>
+          <input id="pr-thr" type="range" min="0.02" max="0.98" step="0.01" value="0.5" />
+          <span class="widget__thr" id="pr-thr-val">0.50</span>
+        </div>
+
+        <div class="metrics">
+          <div class="metric metric--accent"><div class="metric__k">Precision</div><div class="metric__v" id="pr-prec">–</div></div>
+          <div class="metric metric--accent"><div class="metric__k">Recall</div><div class="metric__v" id="pr-rec">–</div></div>
+          <div class="metric"><div class="metric__k">F1</div><div class="metric__v" id="pr-f1">–</div></div>
+          <div class="metric"><div class="metric__k">Flagged</div><div class="metric__v" id="pr-flag">–</div></div>
+        </div>
+
+        <div class="confusion">
+          <div class="cell cell--tp"><div class="cell__k">True positives · caught</div><div class="cell__v" id="pr-tp">–</div></div>
+          <div class="cell cell--fp"><div class="cell__k">False positives · false alarms</div><div class="cell__v" id="pr-fp">–</div></div>
+          <div class="cell"><div class="cell__k">False negatives · missed</div><div class="cell__v" id="pr-fn">–</div></div>
+          <div class="cell"><div class="cell__k">True negatives</div><div class="cell__v" id="pr-tn">–</div></div>
+        </div>
+
+        <p class="widget__note" id="pr-note"></p>
+      </div>
+      <!-- ============== /widget ============== -->
+
+      <p>
+        Notice there is no setting that makes both numbers go to 100 percent, because the two
+        score distributions overlap. That overlap is the model's actual uncertainty, and no
+        choice of threshold can argue it away. The threshold only decides how you spend it.
+      </p>
+
+      <h2>When the better model looks worse</h2>
+
+      <p>
+        Here is where this stops being abstract. Sooner or later every production ML team runs
+        a <strong>champion-challenger</strong> evaluation. The champion is the model already in
+        production. Suppose it is an ensemble: several models voting, accurate, but heavy.
+        Every document costs multiple forward passes, latency adds up, and so does the
+        maintenance surface. The challenger is a single model, a fraction of the
+        cost and latency, easier to monitor and retrain. You want it to win.
+      </p>
+
+      <p>
+        So you run the validation set through both and compare at the default threshold of
+        0.5. The challenger's precision is clearly better. Its recall is clearly worse. In a
+        setting where a false negative is a missed real case, the expensive mistake, that
+        reads as disqualifying: faster and cheaper, but it misses more. Keep the champion?
+      </p>
+
+      <p>
+        That verdict is premature, and usually wrong. Comparing two models at the same
+        threshold feels like apples to apples, but 0.5 is not a property of the problem; it is
+        a property of each model's score scale. Two models can rank cases almost identically
+        and still distribute their scores differently: one spreads scores wide, the other
+        compresses them toward the low end. The same cut line lands at completely different
+        operating points on each. You have not compared two models. You have compared two
+        arbitrary points.
+      </p>
+
+      <h2>Compare curves, not points</h2>
+
+      <p>The fix is to evaluate threshold-free first. Sweep the threshold across its whole range, trace out every precision-recall pair each model can offer, and you get the precision–recall curve. If the challenger's curve sits at or above the champion's, it is at least as good at every operating point. It does not need the champion's threshold; it needs its own. One reference line to read it by: the dashed gray baseline is what flagging at random would get you – precision equal to the prevalence of true positives, at every recall. Any model worth running lives above it.</p>
+
+      <!-- ============== Widget 2: champion vs challenger PR curves ============== -->
+      <div class="widget" id="pr2-widget">
+        <p class="widget__cap">Interactive · Champion vs challenger</p>
+        <p class="widget__title">A fixed champion, a tunable challenger</p>
+
+        <div class="legendrow">
+          <span><span class="swatch" style="background:var(--ink-faint)"></span><span id="pr2-leg-c">Champion · ensemble</span></span>
+          <span><span class="swatch" style="background:var(--accent)"></span><span id="pr2-leg-h">Challenger · single model</span></span>
+          <span><span class="swatch" style="background:var(--chart-gold)"></span>98% recall floor</span>
+          <span>Gray dot: champion, fixed at its production 0.50 · Accent dot: challenger at the slider</span>
+        </div>
+
+        <div class="widget__canvas-wrap"><canvas id="pr2-canvas" height="280"></canvas></div>
+
+        <div class="widget__sliderrow">
+          <label for="pr2-thr">CHALLENGER THRESHOLD</label>
+          <input id="pr2-thr" type="range" min="0.02" max="0.98" step="0.01" value="0.5" />
+          <span class="widget__thr" id="pr2-thr-val">0.50</span>
+        </div>
+
+        <div class="metrics">
+          <div class="metric"><div class="metric__k">Champion · precision @ 0.50</div><div class="metric__v" id="pr2-cp">–</div></div>
+          <div class="metric"><div class="metric__k">Champion · recall @ 0.50</div><div class="metric__v" id="pr2-cr">–</div></div>
+          <div class="metric metric--accent"><div class="metric__k">Challenger · precision</div><div class="metric__v" id="pr2-hp">–</div></div>
+          <div class="metric metric--accent"><div class="metric__k">Challenger · recall</div><div class="metric__v" id="pr2-hr">–</div></div>
+        </div>
+
+        <p class="widget__note" id="pr2-note"></p>
+      </div>
+      <!-- ============== /widget 2 ============== -->
+
+      <p>
+        Watch the dots. The gray one never moves: the champion is in production at its chosen
+        operating point. At 0.5 the challenger sits parked at the far high-precision,
+        low-recall end of its own curve, and that gap is the whole illusion. Drag its
+        threshold down and it walks along its curve until it matches, then beats, the
+        champion's recall, while still holding the precision advantage. The model was never
+        worse; the default just parked it at the wrong operating point.
+      </p>
+
+      <p>
+        Could you retune the champion too? Of course. Its threshold is just as movable, and
+        everything tuning could buy is already drawn: its full curve. That is the point of
+        the curve. But look where that curve sits – below the challenger's at every recall.
+        No threshold rescues it. When one curve dominates another, the bake-off is over
+        before either model picks an operating point; the only remaining question is where
+        on the winning curve to run.
+      </p>
+
+      <p>
+        The gold line is the part that settles the bake-off. In cancer surveillance the floor
+        is real and unforgiving: a registry is expected to capture at least 98 percent of true
+        cases. So the deciding question is not who wins at 0.5; it is who delivers more
+        precision at that floor. Drag the threshold past it and look at the gap.
+      </p>
+
+      <h2>Best F1 is just another default</h2>
+
+      <p>
+        At this point a tempting shortcut appears: sweep the threshold, pick the one that
+        maximizes F1, and report that. It feels principled because it came from a curve. But
+        F1 is the harmonic mean of precision and recall, which means it weights a false alarm
+        and a missed case equally, and that equality is an assumption smuggled in as a
+        default, exactly like 0.5 was. If a missed case costs ten times what a false alarm
+        costs, F1 is quietly optimizing the wrong objective.
+      </p>
+
+      <!-- ============== Widget 3: F1 / precision / recall vs threshold ============== -->
+      <div class="widget" id="f1-widget">
+        <p class="widget__cap">Interactive · Threshold sweep · challenger model</p>
+        <p class="widget__title">F1, precision, and recall across every threshold</p>
+
+        <div class="legendrow">
+          <span><span class="swatch" style="background:var(--accent)"></span>Precision</span>
+          <span><span class="swatch" style="background:var(--chart-green)"></span>Recall</span>
+          <span><span class="swatch" style="background:var(--chart-orange)"></span>F1</span>
+          <span><span class="swatch" style="background:var(--chart-gold)"></span>Best F1</span>
+        </div>
+
+        <div class="widget__canvas-wrap"><canvas id="f1-canvas" height="260"></canvas></div>
+
+        <div class="widget__sliderrow">
+          <label for="f1-thr">THRESHOLD</label>
+          <input id="f1-thr" type="range" min="0.02" max="0.98" step="0.01" value="0.5" />
+          <span class="widget__thr" id="f1-thr-val">0.50</span>
+        </div>
+
+        <div class="metrics">
+          <div class="metric metric--accent"><div class="metric__k">Precision</div><div class="metric__v" id="f1-p">–</div></div>
+          <div class="metric metric--accent"><div class="metric__k">Recall</div><div class="metric__v" id="f1-r">–</div></div>
+          <div class="metric"><div class="metric__k">F1</div><div class="metric__v" id="f1-f">–</div></div>
+          <div class="metric"><div class="metric__k">Missed cases</div><div class="metric__v" id="f1-fn">–</div></div>
+        </div>
+
+        <p class="widget__note" id="f1-note"></p>
+      </div>
+      <!-- ============== /widget 3 ============== -->
+
+      <p>
+        Two things to notice. First, the F1 curve is flat across a wide band of thresholds:
+        many settings look almost equally good by F1 while recall swings substantially
+        underneath. A metric that cannot tell those settings apart is a blunt instrument for
+        choosing between them. Second, the best-F1 point is marked because it is worth
+        knowing, not because it decides anything. If the requirement is to catch at least 98
+        percent of real cases, the requirement picks the threshold: the highest one that
+        still clears the floor. Best F1 is a diagnostic. The recall floor is the decision.
+      </p>
+
+      <h2>Doing this in code</h2>
+
+      <p>
+        Mechanically this is a few lines. The work is not the arithmetic; it is deciding what
+        precision and recall need to be for this particular use, given who is affected by each
+        kind of error.
+      </p>
+
+      <pre class="code-block"><span class="c-cap">python</span><code><span class="tok-kw">import</span> numpy <span class="tok-kw">as</span> np
+
+<span class="tok-com"># scores: 1-D float array, the model's positive-class score per case</span>
+<span class="tok-com">#         (e.g. sigmoid/softmax output in [0, 1]); higher = more likely positive.</span>
+<span class="tok-com"># labels: 1-D boolean array, the ground truth; True = really positive.</span>
+<span class="tok-com"># Same length, same order. threshold: the cut you're testing.</span>
+<span class="tok-kw">def</span> <span class="tok-fn">metrics_at</span>(scores, labels, threshold):
+    pred = scores &gt;= threshold  <span class="tok-com"># flag everything at or above the line</span>
+    tp = np.<span class="tok-fn">sum</span>(pred &amp; labels)
+    fp = np.<span class="tok-fn">sum</span>(pred &amp; ~labels)
+    fn = np.<span class="tok-fn">sum</span>(~pred &amp; labels)
+    precision = tp / (tp + fp) <span class="tok-kw">if</span> (tp + fp) <span class="tok-kw">else</span> <span class="tok-num">0.0</span>
+    recall    = tp / (tp + fn) <span class="tok-kw">if</span> (tp + fn) <span class="tok-kw">else</span> <span class="tok-num">0.0</span>
+    <span class="tok-kw">return</span> precision, recall
+
+<span class="tok-com"># Pick the operating point from the requirement, not the other way around.</span>
+<span class="tok-com"># e.g. "we must catch at least 98% of real cases" -&gt; choose the</span>
+<span class="tok-com"># highest threshold whose recall is still &gt;= 0.98.</span></code></pre>
+
+      <p>
+        The trap is to report a single accuracy number, or to quietly leave the threshold at
+        0.5 because that is the default. On an imbalanced problem, 0.5 is rarely the right
+        line, and accuracy can look excellent while the model misses most of the cases you
+        actually care about.
+      </p>
+
+      <blockquote>
+        Pick the operating point from the requirement, then measure the model against it.
+        Do not let the default threshold quietly make a decision that belongs to you.
+      </blockquote>
+
+      <h2>Where a threshold can let you down</h2>
+
+      <p>
+        A threshold is not magic. It is a policy decision attached to a score distribution,
+        and it inherits every weakness of that distribution. Three limitations worth naming:
+      </p>
+
+      <ul>
+        <li><strong>It is only as stable as the scores underneath it.</strong> Tune it on a
+        validation set, deploy, and then the case mix shifts or the model is retrained: the
+        score distribution moves, and the threshold silently stops meaning what it meant. The
+        operating point you validated is no longer the one you are running. This is why
+        threshold choice and drift monitoring are one system, not two.</li>
+        <li><strong>It is an estimate, not a fact.</strong> “Recall is 98% at this threshold”
+        is measured from finite data, and the data are thinnest exactly where high-stakes
+        operating points live, out in the tail. Put uncertainty around the number, and pick
+        the threshold whose <em>lower</em> confidence bound clears the floor, not its point
+        estimate.</li>
+        <li><strong>One line may be too few.</strong> Nothing says a decision needs exactly
+        one threshold. Auto-accept above a high line, auto-reject below a low one, and route
+        the uncertain middle to human review. That two-threshold design is how high-recall
+        systems protect the floor in practice without drowning anyone in false positives.</li>
+      </ul>
+
+      <p>
+        And what about sidestepping the threshold entirely – ensembling several models and
+        acting on their consensus instead? It is a good instinct, but it is not actually an
+        alternative. A vote is a threshold in disguise: “flag when two of three models
+        agree” is a cut at two-thirds on the ensemble’s averaged score, just coarser and
+        harder to tune. What ensembling genuinely buys is better, more stable scores:
+        averaging across models smooths out individual quirks, improves the ranking, and
+        makes the score distribution drift less, which protects whatever operating point you
+        choose. So the two are complements, not rivals. Ensemble to score well; threshold to
+        act deliberately.
+      </p>
+
+      <h2>What to take away</h2>
+
+      <p>
+        A model gives you a ranking. The threshold turns that ranking into action, and it
+        encodes a value judgment about which mistakes you can live with. Treat it as part of
+        the product: write down the requirement, choose the operating point that meets it, and
+        revisit it when the cost of errors changes. And when a challenger looks worse than
+        your champion at the default threshold, do not conclude, sweep. Compare the curves,
+        match the models at the recall the business actually needs, and only then decide.
+        Then hold the line loosely: a threshold is only as trustworthy as the scores beneath
+        it, so monitor it like the part of the model it is. The math is the easy part.
+      </p>
+    </div>
+  </article>
+
+  <div class="article-foot">
+    <a class="textlink" href="../writing.html">← Back to writing</a>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="site-footer__inner">
+    <div>
+      <div class="site-footer__name">Jonathan Simkin, PhD</div>
+      <div class="site-footer__meta">Data &amp; Analytics Leader · Vancouver, BC</div>
+    </div>
+    <ul class="social">
+      <li><a href="mailto:jonathan.d.simkin@gmail.com"><span class="social__k">Email</span><span class="social__v">jonathan.d.simkin</span></a></li>
+      <li><a href="https://www.linkedin.com/in/jonathan-d-s" target="_blank" rel="noopener"><span class="social__k">LinkedIn</span><span class="social__v">in/jonathan-d-s</span></a></li>
+      <li><a href="https://github.com/jdsimkin04" target="_blank" rel="noopener"><span class="social__k">GitHub</span><span class="social__v">jdsimkin04</span></a></li>
+      <li><a href="https://scholar.google.ca/citations?user=SehfEC8AAAAJ" target="_blank" rel="noopener"><span class="social__k">Scholar</span><span class="social__v">Google Scholar</span></a></li>
+    </ul>
+  </div>
+</footer>
+
+<script src="../js/site.js"></script>
+<script>
+/* ============================================================
+   Precision / recall demo – self-contained, no dependencies.
+   Generates a fixed synthetic population once, then recomputes
+   metrics and redraws the score histogram as the threshold moves.
+   ============================================================ */
+(function () {
+  var N = 240, PREV = 0.38;
+
+  // Deterministic PRNG so the population is identical every load.
+  function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+  var rng = mulberry32(20260528);
+  function gauss(m,s){var u=1-rng(),v=rng();return m+s*Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);}
+  function clamp01(x){return x<0.001?0.001:x>0.999?0.999:x;}
+
+  var data = [];
+  for (var i=0;i<N;i++){
+    var pos = rng() < PREV;
+    var score = pos ? gauss(0.66,0.16) : gauss(0.36,0.17);
+    data.push({ s: clamp01(score), y: pos });
+  }
+
+  var BINS = 40;
+  var posBins = new Array(BINS).fill(0), negBins = new Array(BINS).fill(0), maxBin = 0;
+  data.forEach(function(d){
+    var b = Math.min(BINS-1, Math.floor(d.s*BINS));
+    if (d.y) posBins[b]++; else negBins[b]++;
+  });
+  for (var b=0;b<BINS;b++){ maxBin = Math.max(maxBin, posBins[b], negBins[b]); }
+
+  var canvas = document.getElementById('pr-canvas');
+  var ctx = canvas.getContext('2d');
+  var thr = document.getElementById('pr-thr');
+
+  function cssVar(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+  function draw(t){
+    var dpr = window.devicePixelRatio || 1;
+    var cssW = canvas.clientWidth || 600, cssH = 200;
+    canvas.width = cssW*dpr; canvas.height = cssH*dpr;
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.clearRect(0,0,cssW,cssH);
+
+    var accent = cssVar('--accent') || '#1f4ed8';
+    var faint  = cssVar('--ink-faint') || '#8b8f98';
+    var line   = cssVar('--line-strong') || '#d9dadf';
+    var ink    = cssVar('--ink') || '#16171a';
+
+    var padB = 26, padT = 8, plotH = cssH - padB - padT;
+    var bw = cssW / BINS;
+
+    // baseline
+    ctx.strokeStyle = line; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, padT+plotH+0.5); ctx.lineTo(cssW, padT+plotH+0.5); ctx.stroke();
+
+    function bars(bins, color, alpha){
+      ctx.fillStyle = color; ctx.globalAlpha = alpha;
+      for (var i=0;i<BINS;i++){
+        var h = bins[i]/maxBin*plotH;
+        if (h<=0) continue;
+        ctx.fillRect(i*bw+1, padT+plotH-h, Math.max(1,bw-2), h);
+      }
+      ctx.globalAlpha = 1;
+    }
+    bars(negBins, faint, 0.5);
+    bars(posBins, accent, 0.82);
+
+    // threshold line
+    var tx = t*cssW;
+    // shaded "flagged" region
+    ctx.fillStyle = accent; ctx.globalAlpha = 0.06;
+    ctx.fillRect(tx, padT, cssW-tx, plotH);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = accent; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(tx, 0); ctx.lineTo(tx, padT+plotH); ctx.stroke();
+
+    // axis labels
+    ctx.fillStyle = faint;
+    ctx.font = '11px "JetBrains Mono", monospace';
+    ctx.textBaseline = 'alphabetic';
+    ctx.textAlign='left';   ctx.fillText('score 0.0', 2, cssH-8);
+    ctx.textAlign='right';  ctx.fillText('1.0', cssW-2, cssH-8);
+    ctx.textAlign='center';
+    ctx.fillStyle = accent;
+    var lbl = 'flag \u2192';
+    ctx.fillText(t > 0.82 ? '' : lbl, Math.min(cssW-30, tx+30), cssH-8);
+  }
+
+  function fmtPct(x){ return (x*100).toFixed(0) + '%'; }
+
+  function update(){
+    var t = parseFloat(thr.value);
+    document.getElementById('pr-thr-val').textContent = t.toFixed(2);
+
+    var tp=0,fp=0,fn=0,tn=0;
+    data.forEach(function(d){
+      var pred = d.s >= t;
+      if (pred && d.y) tp++;
+      else if (pred && !d.y) fp++;
+      else if (!pred && d.y) fn++;
+      else tn++;
+    });
+    var precision = (tp+fp) ? tp/(tp+fp) : 0;
+    var recall    = (tp+fn) ? tp/(tp+fn) : 0;
+    var f1 = (precision+recall) ? 2*precision*recall/(precision+recall) : 0;
+    var flagged = tp+fp;
+
+    document.getElementById('pr-prec').textContent = fmtPct(precision);
+    document.getElementById('pr-rec').textContent  = fmtPct(recall);
+    document.getElementById('pr-f1').textContent   = f1.toFixed(2);
+    document.getElementById('pr-flag').textContent = flagged;
+    document.getElementById('pr-tp').textContent   = tp;
+    document.getElementById('pr-fp').textContent   = fp;
+    document.getElementById('pr-fn').textContent   = fn;
+    document.getElementById('pr-tn').textContent   = tn;
+
+    var note;
+    if (recall >= 0.85 && precision < 0.6) {
+      note = 'A low, aggressive threshold. You catch almost everything real (' + fmtPct(recall) + ' recall), but ' + fp + ' of your ' + flagged + ' flags are false alarms. Good when missing a case is far worse than chasing one.';
+    } else if (precision >= 0.8 && recall < 0.6) {
+      note = 'A high, cautious threshold. ' + fmtPct(precision) + ' of what you flag is real, but you miss ' + fn + ' true cases. Good when a false alarm is expensive and a miss is tolerable.';
+    } else {
+      note = 'At threshold ' + t.toFixed(2) + ', you flag ' + flagged + ' of ' + N + ' cases. You catch ' + fmtPct(recall) + ' of the real positives (recall), and ' + fmtPct(precision) + ' of what you flag is correct (precision).';
+    }
+    document.getElementById('pr-note').textContent = note;
+
+    draw(t);
+  }
+
+  thr.addEventListener('input', update);
+  window.addEventListener('resize', function(){ draw(parseFloat(thr.value)); });
+  // Redraw on theme change so colors track light/dark.
+  new MutationObserver(function(){ draw(parseFloat(thr.value)); })
+    .observe(document.documentElement, { attributes:true, attributeFilter:['data-theme'] });
+
+  update();
+})();
+</script>
+<script>
+/* ============================================================
+   Champion vs challenger demo – one synthetic population scored
+   by two models. The champion (ensemble) is noisier but spreads
+   its scores wide; the challenger (single model) ranks better
+   but compresses scores low, so the default 0.5 threshold lands
+   at a different operating point on each.
+   ============================================================ */
+(function () {
+  function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+  var rng = mulberry32(20260609);
+  function gauss(m,s){var u=1-rng(),v=rng();return m+s*Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);}
+  function sigmoid(x){return 1/(1+Math.exp(-x));}
+
+  var N = 900, PREV = 0.33, POS = 0;
+  var cases = [];
+  for (var i=0;i<N;i++){
+    var y = rng() < PREV;
+    var z = y ? gauss(2.0,1.0) : gauss(-1.7,1.0);
+    var c = sigmoid(z + gauss(0,0.95));              // champion: wide spread, noisier ranking
+    var h = sigmoid(0.8*(z + gauss(0,0.45)) - 1.1);  // challenger: better ranking, scores sit low
+    if (y) POS++;
+    cases.push({ y:y, c:c, h:h });
+  }
+
+  function metricsAt(key, t){
+    var tp=0, fp=0;
+    for (var i=0;i<N;i++){ var d=cases[i]; if (d[key]>=t){ if(d.y) tp++; else fp++; } }
+    var fn = POS - tp;
+    var p = (tp+fp) ? tp/(tp+fp) : 1;
+    var r = POS ? tp/POS : 0;
+    var f1 = (p+r) ? 2*p*r/(p+r) : 0;
+    return { p:p, r:r, f1:f1, tp:tp, fp:fp, fn:fn };
+  }
+
+  function prCurve(key){
+    var arr = cases.map(function(d){ return {s:d[key], y:d.y}; }).sort(function(a,b){ return b.s-a.s; });
+    var pts = [{r:0,p:1}], tp=0, fp=0;
+    for (var i=0;i<arr.length;i++){
+      if (arr[i].y) tp++; else fp++;
+      if (i<arr.length-1 && arr[i+1].s===arr[i].s) continue;
+      pts.push({ r:tp/POS, p:tp/(tp+fp) });
+    }
+    return pts;
+  }
+  function prAuc(pts){
+    var a=0;
+    for (var i=1;i<pts.length;i++) a += (pts[i].r-pts[i-1].r)*(pts[i].p+pts[i-1].p)/2;
+    return a;
+  }
+  var curveC = prCurve('c'), curveH = prCurve('h');
+  document.getElementById('pr2-leg-c').textContent = 'Champion · ensemble (PR-AUC ' + prAuc(curveC).toFixed(2) + ')';
+  document.getElementById('pr2-leg-h').textContent = 'Challenger · single model (PR-AUC ' + prAuc(curveH).toFixed(2) + ')';
+
+  // Threshold sweep for the challenger (widget 3)
+  var ts=[], ps=[], rs=[], fs=[], bestI=0;
+  for (var t=0.005; t<=0.9951; t+=0.005){
+    var m = metricsAt('h', t);
+    ts.push(t); ps.push(m.p); rs.push(m.r); fs.push(m.f1);
+    if (m.f1 > fs[bestI]) bestI = ts.length-1;
+  }
+  var REQ = 0.98, reqI = 0;
+  for (var i=ts.length-1; i>=0; i--){ if (rs[i] >= REQ){ reqI = i; break; } }
+
+  // Challenger threshold that matches the champion's recall at the 0.5 default
+  var champAt05 = metricsAt('c', 0.5), matchI = 0;
+  for (var i=ts.length-1; i>=0; i--){ if (rs[i] >= champAt05.r){ matchI = i; break; } }
+  // Champion's precision if forced to the 98% recall floor
+  var champFloorP = 0;
+  for (var tc=0.995; tc>=0.005; tc-=0.005){ var mcf = metricsAt('c', tc); if (mcf.r >= REQ){ champFloorP = mcf.p; break; } }
+
+  function cssVar(n){ return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+  function pal(){
+    return {
+      accent: cssVar('--accent')||'#1f4ed8', faint: cssVar('--ink-faint')||'#8b8f98',
+      grid: cssVar('--line')||'#ececef', lineStrong: cssVar('--line-strong')||'#d9dadf',
+      ink: cssVar('--ink')||'#16171a', bg: cssVar('--bg-card')||'#fff',
+      green: cssVar('--chart-green')||'#1e8a5f', orange: cssVar('--chart-orange')||'#c45c25',
+      gold: cssVar('--chart-gold')||'#a87f1d'
+    };
+  }
+  function frame(canvas){
+    var dpr = window.devicePixelRatio||1;
+    if (!canvas.dataset.cssH) canvas.dataset.cssH = canvas.getAttribute('height') || '260';
+    var w = canvas.clientWidth||600, h = parseInt(canvas.dataset.cssH,10);
+    canvas.width = w*dpr; canvas.height = h*dpr;
+    canvas.style.height = h + 'px';
+    var ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,w,h);
+    return { ctx:ctx, w:w, h:h };
+  }
+  var PAD = { l:48, r:14, t:12, b:34 };
+  function gridAndAxes(ctx, w, h, C, xCap, yCap){
+    var pw = w-PAD.l-PAD.r, ph = h-PAD.t-PAD.b;
+    function X(v){ return PAD.l + v*pw; }
+    function Y(v){ return PAD.t + (1-v)*ph; }
+    ctx.strokeStyle = C.grid; ctx.lineWidth = 1;
+    [0,0.25,0.5,0.75,1].forEach(function(g){
+      ctx.beginPath(); ctx.moveTo(Math.round(X(g))+0.5, PAD.t); ctx.lineTo(Math.round(X(g))+0.5, PAD.t+ph); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(PAD.l, Math.round(Y(g))+0.5); ctx.lineTo(PAD.l+pw, Math.round(Y(g))+0.5); ctx.stroke();
+    });
+    ctx.fillStyle = C.faint; ctx.font = '10px "JetBrains Mono", monospace'; ctx.textBaseline = 'alphabetic';
+    ctx.textAlign = 'center';
+    [0,0.5,1].forEach(function(g){ ctx.fillText(g===0?'0':g===1?'1':'0.5', X(g), h-20); });
+    ctx.fillText(xCap, PAD.l+pw/2, h-6);
+    ctx.textAlign = 'right';
+    [0,0.5,1].forEach(function(g){ ctx.fillText(g===0?'0':g===1?'1':'0.5', PAD.l-7, Y(g)+3); });
+    ctx.save(); ctx.translate(11, PAD.t+ph/2); ctx.rotate(-Math.PI/2);
+    ctx.textAlign = 'center'; ctx.fillText(yCap, 0, 0); ctx.restore();
+    return { X:X, Y:Y, pw:pw, ph:ph };
+  }
+  function poly(ctx, g, xs, ys, color, width, dash){
+    ctx.strokeStyle = color; ctx.lineWidth = width; ctx.lineJoin = 'round';
+    ctx.setLineDash(dash||[]);
+    ctx.beginPath(); ctx.moveTo(g.X(xs[0]), g.Y(ys[0]));
+    for (var i=1;i<xs.length;i++) ctx.lineTo(g.X(xs[i]), g.Y(ys[i]));
+    ctx.stroke(); ctx.setLineDash([]);
+  }
+
+  /* ---------- Widget 2: PR curves ---------- */
+  var prCanvas = document.getElementById('pr2-canvas');
+  var pr2thr = document.getElementById('pr2-thr');
+  function fmtPct(x){ return (x*100).toFixed(0)+'%'; }
+
+  function drawPR(t){
+    var f = frame(prCanvas), ctx = f.ctx, C = pal();
+    var g = gridAndAxes(ctx, f.w, f.h, C, 'recall \u2192', 'precision');
+    // random baseline at prevalence
+    var base = POS/N;
+    ctx.strokeStyle = C.lineStrong; ctx.setLineDash([4,4]);
+    ctx.beginPath(); ctx.moveTo(PAD.l, g.Y(base)); ctx.lineTo(PAD.l+g.pw, g.Y(base)); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = C.faint; ctx.textAlign = 'left'; ctx.font = '10px "JetBrains Mono", monospace';
+    ctx.fillText('random baseline \u00b7 precision = prevalence (' + base.toFixed(2) + ')', PAD.l+6, g.Y(base)+13);
+    poly(ctx, g, curveC.map(function(d){return d.r;}), curveC.map(function(d){return d.p;}), C.faint, 2);
+    poly(ctx, g, curveH.map(function(d){return d.r;}), curveH.map(function(d){return d.p;}), C.accent, 2.2);
+    // business recall floor
+    var fx = g.X(REQ);
+    ctx.strokeStyle = C.gold; ctx.lineWidth = 1.5; ctx.setLineDash([5,4]);
+    ctx.beginPath(); ctx.moveTo(fx, PAD.t); ctx.lineTo(fx, PAD.t+g.ph); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = C.gold; ctx.textAlign = 'right'; ctx.font = '10px "JetBrains Mono", monospace';
+    ctx.fillText('98% floor', fx-6, PAD.t+14);
+    var mh = metricsAt('h', t);
+    function dot(m, color){
+      ctx.fillStyle = color; ctx.beginPath(); ctx.arc(g.X(m.r), g.Y(m.p), 4.5, 0, 7); ctx.fill();
+      ctx.strokeStyle = C.bg; ctx.lineWidth = 1.5; ctx.stroke();
+    }
+    dot(champAt05, C.faint); dot(mh, C.accent);
+    ctx.fillStyle = C.ink; ctx.textAlign = 'left';
+    ctx.fillText('t=' + t.toFixed(2), Math.min(g.X(mh.r)+9, PAD.l+g.pw-44), g.Y(mh.p)+13);
+  }
+
+  function updatePR(){
+    var t = parseFloat(pr2thr.value);
+    document.getElementById('pr2-thr-val').textContent = t.toFixed(2);
+    var mh = metricsAt('h', t);
+    document.getElementById('pr2-cp').textContent = fmtPct(champAt05.p);
+    document.getElementById('pr2-cr').textContent = fmtPct(champAt05.r);
+    document.getElementById('pr2-hp').textContent = fmtPct(mh.p);
+    document.getElementById('pr2-hr').textContent = fmtPct(mh.r);
+    var note;
+    if (Math.abs(t-0.5) < 0.03) {
+      note = 'At its default 0.50 the challenger reads as a recall regression: ' + fmtPct(mh.r) +
+        ' of real cases caught against the champion\u2019s ' + fmtPct(champAt05.r) +
+        ', even though its precision is far higher. Drag its threshold down to about ' + ts[matchI].toFixed(2) +
+        ' and it matches the champion\u2019s recall with precision to spare.';
+    } else if (mh.r >= REQ) {
+      note = 'At ' + t.toFixed(2) + ' the challenger clears the 98% recall floor with ' + fmtPct(mh.p) +
+        ' precision. Forced to the same floor, the champion manages only ' + fmtPct(champFloorP) +
+        ' \u2014 the challenger wins exactly where the business needs it to.';
+    } else if (mh.r >= champAt05.r) {
+      note = 'At ' + t.toFixed(2) + ' the challenger catches ' + fmtPct(mh.r) + ' of real cases (champion: ' +
+        fmtPct(champAt05.r) + ') at ' + fmtPct(mh.p) + ' precision (champion: ' + fmtPct(champAt05.p) +
+        ') \u2014 better on both axes. The trade was there all along; 0.5 just hid it.';
+    } else {
+      note = 'At ' + t.toFixed(2) + ' the challenger runs at ' + fmtPct(mh.p) + ' precision / ' + fmtPct(mh.r) +
+        ' recall. The champion stays parked at its production threshold of 0.50.';
+    }
+    document.getElementById('pr2-note').textContent = note;
+    drawPR(t);
+  }
+
+  /* ---------- Widget 3: F1 / P / R vs threshold ---------- */
+  var f1Canvas = document.getElementById('f1-canvas');
+  var f1thr = document.getElementById('f1-thr');
+
+  function drawF1(t){
+    var f = frame(f1Canvas), ctx = f.ctx, C = pal();
+    var g = gridAndAxes(ctx, f.w, f.h, C, 'threshold \u2192', 'score');
+    poly(ctx, g, ts, ps, C.accent, 1.6, [5,3]);
+    poly(ctx, g, ts, rs, C.green, 1.6, [5,3]);
+    poly(ctx, g, ts, fs, C.orange, 2.2);
+    // best F1 marker
+    var bx = g.X(ts[bestI]);
+    ctx.strokeStyle = C.gold; ctx.lineWidth = 1.5; ctx.setLineDash([5,4]);
+    ctx.beginPath(); ctx.moveTo(bx, PAD.t); ctx.lineTo(bx, PAD.t+g.ph); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = C.gold; ctx.beginPath(); ctx.arc(bx, g.Y(fs[bestI]), 4.5, 0, 7); ctx.fill();
+    ctx.font = '10px "JetBrains Mono", monospace';
+    var left = ts[bestI] > 0.55;
+    ctx.textAlign = left ? 'right' : 'left';
+    var lx = left ? bx-8 : bx+8;
+    ctx.fillText('best F1 ' + fs[bestI].toFixed(2), lx, PAD.t+14);
+    ctx.fillText('t = ' + ts[bestI].toFixed(2), lx, PAD.t+27);
+    // 98% recall floor
+    var qx = g.X(ts[reqI]);
+    ctx.strokeStyle = C.green; ctx.lineWidth = 1.2; ctx.setLineDash([3,4]);
+    ctx.beginPath(); ctx.moveTo(qx, PAD.t); ctx.lineTo(qx, PAD.t+g.ph); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = C.green; ctx.textAlign = 'left';
+    ctx.fillText('98% floor', qx+8, PAD.t+g.ph-10);
+    // current threshold
+    var cx = g.X(t);
+    ctx.strokeStyle = C.ink; ctx.globalAlpha = 0.6; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(cx, PAD.t); ctx.lineTo(cx, PAD.t+g.ph); ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  function updateF1(){
+    var t = parseFloat(f1thr.value);
+    document.getElementById('f1-thr-val').textContent = t.toFixed(2);
+    var m = metricsAt('h', t);
+    document.getElementById('f1-p').textContent = fmtPct(m.p);
+    document.getElementById('f1-r').textContent = fmtPct(m.r);
+    document.getElementById('f1-f').textContent = m.f1.toFixed(2);
+    document.getElementById('f1-fn').textContent = m.fn;
+    var note;
+    var recPct1 = (m.r*100).toFixed(1) + '%';
+    if (m.r >= REQ) {
+      note = 'At ' + t.toFixed(2) + ', recall is ' + recPct1 + ' \u2014 clears the 98% floor with ' + fmtPct(m.p) +
+        ' precision, missing ' + m.fn + ' real cases. The highest threshold that still clears the floor is ' +
+        ts[reqI].toFixed(2) + ', with ' + fmtPct(ps[reqI]) + ' precision.';
+    } else {
+      note = 'At ' + t.toFixed(2) + ', F1 is ' + m.f1.toFixed(2) + ' but recall is ' + recPct1 +
+        ' \u2014 below the 98% catch-rate floor, leaving ' + m.fn + ' real cases missed. Best F1 (' +
+        fs[bestI].toFixed(2) + ' at t=' + ts[bestI].toFixed(2) + ') doesn\u2019t know your false negatives cost more.';
+    }
+    document.getElementById('f1-note').textContent = note;
+    drawF1(t);
+  }
+
+  pr2thr.addEventListener('input', updatePR);
+  f1thr.addEventListener('input', updateF1);
+  window.addEventListener('resize', function(){ drawPR(parseFloat(pr2thr.value)); drawF1(parseFloat(f1thr.value)); });
+  new MutationObserver(function(){ drawPR(parseFloat(pr2thr.value)); drawF1(parseFloat(f1thr.value)); })
+    .observe(document.documentElement, { attributes:true, attributeFilter:['data-theme'] });
+
+  updatePR();
+  updateF1();
+})();
+</script>
+</body>
+</html>
