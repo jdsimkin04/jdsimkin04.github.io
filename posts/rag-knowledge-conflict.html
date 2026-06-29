@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>A citation is not grounding – Jonathan Simkin</title>
+<meta name="description" content="A correct citation is not a grounded answer. A look at knowledge conflict in RAG systems, built around a registry assistant that cited the right WHO ICD-O-3 table and still returned the wrong code." />
+<script>(function(){try{var t=localStorage.getItem('theme');if(!t)t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+  html[data-theme="light"] { --kc-good:#1e8a5f; --kc-bad:#c0392b; --kc-good-bg:#e7f3ee; --kc-bad-bg:#f8e8e5; }
+  html[data-theme="dark"]  { --kc-good:#5fc394; --kc-bad:#ec8475; --kc-good-bg:#11241c; --kc-bad-bg:#2b1815; }
+
+  /* Pipeline figure */
+  .kc-figure { margin: 26px 0; }
+  .kc-figure svg { width: 100%; height: auto; display: block; }
+  .kc-figure figcaption { font-family: var(--mono); font-size: 11.5px; color: var(--ink-soft); margin-top: 10px; text-align: center; }
+
+  /* Interactive widget, scoped to #kc-widget */
+  #kc-widget .kc-q { display:flex; flex-wrap:wrap; align-items:baseline; gap:10px; margin:4px 0 16px; }
+  #kc-widget .kc-q__label { font-family:var(--mono); font-size:11px; letter-spacing:.08em; color:var(--ink-faint); }
+  #kc-widget .kc-q__text { font-weight:600; }
+  #kc-widget .kc-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  @media (max-width:640px){ #kc-widget .kc-grid { grid-template-columns:1fr; } }
+  #kc-widget .kc-panel { border:1px solid var(--ink-faint); border-radius:10px; padding:12px 13px; }
+  #kc-widget .kc-panel__head { display:flex; align-items:center; justify-content:space-between; gap:8px; font-family:var(--mono); font-size:11px; letter-spacing:.06em; color:var(--ink-soft); margin-bottom:9px; text-transform:uppercase; }
+  #kc-widget .kc-pill { font-size:10px; color:var(--accent); border:1px solid var(--accent); border-radius:20px; padding:1px 7px; letter-spacing:.04em; text-transform:none; white-space:nowrap; }
+  #kc-widget .kc-table { width:100%; border-collapse:collapse; font-size:13px; }
+  #kc-widget .kc-table td { padding:5px 4px; border-top:1px solid var(--ink-faint); vertical-align:top; }
+  #kc-widget .kc-table tr:first-child td { border-top:none; }
+  #kc-widget .kc-code { font-family:var(--mono); white-space:nowrap; padding-right:10px; color:var(--ink); }
+  #kc-widget .kc-row--match .kc-code { color:var(--accent); font-weight:600; }
+  #kc-widget .kc-match { display:inline-block; font-family:var(--mono); font-size:10px; color:var(--accent); border:1px solid var(--accent); border-radius:20px; padding:0 7px; margin-left:6px; white-space:nowrap; }
+  #kc-widget .kc-panel__foot { margin:10px 0 0; font-size:12px; color:var(--ink-soft); }
+  #kc-widget .kc-toggle { display:flex; gap:4px; border-bottom:1px solid var(--ink-faint); margin-bottom:11px; }
+  #kc-widget .kc-tab { appearance:none; background:none; border:none; border-bottom:2px solid transparent; margin-bottom:-1px; padding:6px 10px; font:inherit; font-size:13px; color:var(--ink-soft); cursor:pointer; }
+  #kc-widget .kc-tab:hover { color:var(--ink); }
+  #kc-widget .kc-tab.is-active { color:var(--ink); border-bottom-color:var(--accent); font-weight:600; }
+  #kc-widget .kc-tab:focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:3px; }
+  #kc-widget .kc-prompt { font-family:var(--mono); font-size:12px; line-height:1.55; white-space:pre-wrap; margin:0; color:var(--ink); }
+  #kc-widget .kc-answer { margin-top:14px; border:1px solid var(--ink-faint); border-left-width:3px; border-radius:10px; padding:12px 14px; }
+  #kc-widget .kc-answer.is-good { border-left-color:var(--kc-good); background:var(--kc-good-bg); }
+  #kc-widget .kc-answer.is-bad  { border-left-color:var(--kc-bad);  background:var(--kc-bad-bg); }
+  #kc-widget .kc-answer__head { display:flex; align-items:center; gap:9px; margin-bottom:7px; }
+  #kc-widget .kc-badge { font-family:var(--mono); font-size:10.5px; letter-spacing:.05em; text-transform:uppercase; border-radius:20px; padding:2px 9px; }
+  #kc-widget .kc-badge.is-good { color:var(--kc-good); border:1px solid var(--kc-good); }
+  #kc-widget .kc-badge.is-bad  { color:var(--kc-bad);  border:1px solid var(--kc-bad); }
+  #kc-widget .kc-answer__title { font-family:var(--mono); font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); }
+  #kc-widget .kc-answer__code { font-family:var(--mono); font-size:15px; font-weight:600; color:var(--ink); margin-bottom:6px; }
+  #kc-widget .kc-cite { font-family:var(--mono); font-size:11.5px; color:var(--ink-soft); margin:0 0 8px; }
+  #kc-widget .kc-cite__k { color:var(--ink-faint); letter-spacing:.04em; text-transform:uppercase; margin-right:6px; }
+  #kc-widget .kc-answer__note { margin:0; font-size:13px; line-height:1.55; color:var(--ink-soft); }
+  #kc-widget .metric__v.is-good { color:var(--kc-good); }
+  #kc-widget .metric__v.is-bad  { color:var(--kc-bad); }
+
+  .article .refs-list { list-style:none; padding-left:0; }
+  .article .refs-list li { margin-bottom:10px; font-size:14.5px; line-height:1.5; }
+</style>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="site-header__inner">
+    <a class="brand" href="../index.html">
+      <span class="brand__mono">JS</span>
+      <span class="brand__name">Jonathan Simkin</span>
+    </a>
+    <nav class="nav">
+      <a href="../writing.html">Writing</a>
+      <a href="../resume.html">Resume</a>
+      <button class="theme-toggle" type="button" aria-label="Toggle dark mode">
+        <span class="icon-moon">&#9790;</span>
+        <span class="icon-sun">&#9728;</span>
+      </button>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <article class="article">
+    <header class="article-head">
+      <div class="article-head__meta">
+        <span>June 27, 2026</span>
+        <span>&middot;</span>
+        <span>Generative AI</span>
+        <span>&middot;</span>
+        <span>9 min read</span>
+      </div>
+      <h1>RAG gives you the machinery for grounding. It does not give you grounding.</h1>
+      <p class="article-head__standfirst">
+        Bolting retrieval onto a model does not give you a grounded answer. My cancer registry coding assistant
+        cited the correct source, the public WHO ICD-O-3 lookup table, and still returned the wrong
+        code from it: confident, sourced, and wrong. A citation tells you the model looked at a
+        document. It does not tell you the answer matches what the document says.
+      </p>
+    </header>
+
+    <div class="prose">
+      <p>
+        <em>I gave a plenary and a concurrent talk on this at NAACCR 2026 last week. This is the
+        written version of one lesson from those sessions, for anyone who could not make it.</em>
+      </p>
+
+      <h2>It cited the right table and still got the code wrong</h2>
+
+      <p>
+        I piloted a retrieval-augmented assistant to help with cancer registry coding. The shape is
+        the standard one: someone asks a question, the system searches the indexed guidelines and
+        coding tables, and answers with citations back to the source. And it worked. On a 20-question
+        test set, 10 site and 10 histology, it got 18 right. So this is not a story about RAG falling
+        over. It mostly does the job, and the numbers say so. It is a story about the two it missed,
+        because the way it missed one of them was not what I expected.
+      </p>
+
+      <p>
+        The question was to code <em>Acute leukemia, NOS</em> in ICD-O-3. This was a histology lookup,
+        the kind of thing I would have bet on it getting right. The correct code is 9801/3, Acute
+        leukemia, NOS. The assistant returned 9800/3, Leukemia, NOS, the more generic neighbor. And it
+        cited its source: the WHO ICD-O-3 site and histology lookup, the public table that lists both
+        codes. So the answer arrived with a real, relevant citation attached, and that citation pointed
+        at the document that contains the right answer. It was still wrong.
+      </p>
+
+      <p>
+        Here is the part that bugged me. The document was retrieved and cited; you can see it in the
+        output, sitting right next to the code. The correct entry, 9801/3, is in that document. The
+        model returned 9800/3 anyway, which is also in the table, just the wrong line for this term.
+        When a stricter instruction forced it to surface the exact entry first, it returned 9801/3. I
+        want to be careful about what I can and cannot claim: I cannot see why it landed on the wrong
+        row, whether it read past 9801/3 or never weighed it at all. What I can say is that the source
+        was right there, correctly cited, and the answer still did not match the entry the question
+        called for. The citation was real. The grounding was not.
+      </p>
+
+      <figure class="kc-figure">
+        <svg viewBox="0 0 680 168" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="A three-stage flow: the model retrieves and cites the correct source, generation picks the wrong entry from that source, and the answer is cited but wrong. The break is at generation.">
+          <defs>
+            <marker id="kc-arrow" markerWidth="9" markerHeight="9" refX="6.5" refY="3" orient="auto">
+              <path d="M0,0 L7,3 L0,6 Z" fill="var(--ink-faint)"></path>
+            </marker>
+          </defs>
+          <rect x="8" y="40" width="190" height="74" rx="10" fill="none" stroke="var(--kc-good)" stroke-width="1.5"></rect>
+          <text x="103" y="66" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="var(--kc-good)">RETRIEVE &amp; CITE</text>
+          <text x="103" y="86" text-anchor="middle" font-family="Schibsted Grotesk, sans-serif" font-size="12.5" fill="var(--ink)">correct source</text>
+          <text x="103" y="102" text-anchor="middle" font-family="Schibsted Grotesk, sans-serif" font-size="12.5" fill="var(--ink)">cited</text>
+          <line x1="198" y1="77" x2="244" y2="77" stroke="var(--ink-faint)" stroke-width="1.5" marker-end="url(#kc-arrow)"></line>
+          <rect x="245" y="40" width="190" height="74" rx="10" fill="none" stroke="var(--kc-bad)" stroke-width="2"></rect>
+          <text x="340" y="66" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="var(--kc-bad)">GENERATE</text>
+          <text x="340" y="86" text-anchor="middle" font-family="Schibsted Grotesk, sans-serif" font-size="12.5" fill="var(--ink)">wrong entry picked</text>
+          <text x="340" y="102" text-anchor="middle" font-family="Schibsted Grotesk, sans-serif" font-size="12.5" fill="var(--ink)">from the cited source</text>
+          <text x="340" y="146" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10.5" fill="var(--kc-bad)">the break is here</text>
+          <line x1="435" y1="77" x2="481" y2="77" stroke="var(--ink-faint)" stroke-width="1.5" marker-end="url(#kc-arrow)"></line>
+          <rect x="482" y="40" width="190" height="74" rx="10" fill="none" stroke="var(--ink-faint)" stroke-width="1.5"></rect>
+          <text x="577" y="66" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="var(--ink-soft)">ANSWER</text>
+          <text x="577" y="86" text-anchor="middle" font-family="Schibsted Grotesk, sans-serif" font-size="12.5" fill="var(--ink)">cited, plausible,</text>
+          <text x="577" y="102" text-anchor="middle" font-family="Schibsted Grotesk, sans-serif" font-size="12.5" fill="var(--ink)">and wrong</text>
+        </svg>
+        <figcaption>The model points at the right table. The break is downstream, where it picks the wrong entry from the source it cites, not the one the question calls for.</figcaption>
+      </figure>
+
+      <p>
+        Below is that situation, reconstructed. The question is fixed. The cited source is fixed, and
+        it contains the correct value. The only thing you change is the instruction the assistant runs
+        under. Notice what does not change: the citation. Notice what does: whether the answer matches
+        the document it points to.
+      </p>
+
+      <!-- ============== Interactive widget (self-contained) ============== -->
+      <div class="widget" id="kc-widget">
+        <p class="widget__cap">Interactive &middot; Same source cited, different answer</p>
+        <p class="widget__title">Change only the instruction</p>
+
+        <div class="kc-q">
+          <span class="kc-q__label">QUESTION</span>
+          <span class="kc-q__text">Code "Acute leukemia, NOS" in ICD-O-3.</span>
+        </div>
+
+        <div class="kc-grid">
+          <div class="kc-panel">
+            <div class="kc-panel__head"><span>WHO ICD-O-3 lookup</span><span class="kc-pill">cited source</span></div>
+            <table class="kc-table">
+              <tr><td class="kc-code">9800/3</td><td>Leukemia, NOS</td></tr>
+              <tr class="kc-row--match"><td class="kc-code">9801/3</td><td>Acute leukemia, NOS <span class="kc-match">correct value</span></td></tr>
+              <tr><td class="kc-code">9805/3</td><td>Acute biphenotypic leukemia</td></tr>
+            </table>
+            <p class="kc-panel__foot">The correct value, 9801/3, is in this table. The model cites this table in both cases below.</p>
+          </div>
+
+          <div class="kc-panel">
+            <div class="kc-panel__head"><span>System prompt</span></div>
+            <div class="kc-toggle" role="tablist" aria-label="Choose a system prompt">
+              <button class="kc-tab is-active" data-mode="permissive" role="tab" aria-selected="true" type="button">Permissive</button>
+              <button class="kc-tab" data-mode="strict" role="tab" aria-selected="false" type="button">Strict</button>
+            </div>
+            <pre class="kc-prompt" id="kc-prompt"></pre>
+          </div>
+        </div>
+
+        <div class="kc-answer" id="kc-answer">
+          <div class="kc-answer__head">
+            <span class="kc-badge" id="kc-badge"></span>
+            <span class="kc-answer__title">Model answer</span>
+          </div>
+          <div class="kc-answer__code" id="kc-answer-code"></div>
+          <div class="kc-cite"><span class="kc-cite__k">Cited source</span>WHO ICD-O-3 site &amp; histology lookup</div>
+          <p class="kc-answer__note" id="kc-answer-note"></p>
+        </div>
+
+        <div class="metrics">
+          <div class="metric"><div class="metric__k">Model answer</div><div class="metric__v" id="kc-m-ans">&ndash;</div></div>
+          <div class="metric"><div class="metric__k">Cited source</div><div class="metric__v">WHO ICD-O-3</div></div>
+          <div class="metric"><div class="metric__k">Answer matches source?</div><div class="metric__v" id="kc-m-match">&ndash;</div></div>
+        </div>
+
+        <p class="widget__note">The citation is identical in both states. The only thing that changes is whether the answer matches the source it cites.</p>
+      </div>
+      <!-- ============== /widget ============== -->
+
+      <p>
+        The model points at the right table either way. What changes is whether the answer matches the
+        entry the question calls for, or a different line from the same table. A citation cannot tell you
+        which one you got.
+      </p>
+
+      <p>
+        One more thing, because one bug is not a pattern. I ran the same question a few more times (even after I "fixed" it with a stricter prompt..), and
+        it missed the same way each time, citation attached each time, so it is repeatable. What I found
+        interesting was asking the assistant why it got it wrong. BTW. If you haven't asked AI why it gets something wrong, you totally should.
+        The first time, it explained with total
+        confidence that it had anchored on the first matching row and not read far enough to catch the
+        "acute" qualifier. I asked again and got a different confident explanation: it had grabbed an
+        adjacent leukemia row by mistake. A third time, a third story.. every time, a new tidy explanation, and they cannot all be
+        what happened. A model has no privileged view of why it produced a given answer, so each of those
+        accounts is itself a fluent, ungrounded generation, the same failure one level up. The practical
+        point: you cannot debug this from the model's story about itself, only from what it does. That's probably obvious but worth saying.
+      </p>
+
+      <h2>This has a name, and the research helps clarify why</h2>
+
+      <p>
+        What you just saw is a <strong>knowledge conflict</strong>: the source points one way, the
+        model's parametric memory, the statistical residue of everything it absorbed in pretraining,
+        points another, and the model has to pick. Or at least, when I dug into the literature, this seemed to be an interesting theory to explore.
+        It helps to keep two things separate here. Retrieval
+        gets information into the context. Whether the generated answer is controlled by that context,
+        rather than by what the model already believed, is a different question, and it's possible that that's the one that
+        bit us. The survey of this area (Xu et al., 2024) sorts these conflicts into three kinds:
+        context-memory conflict, which is ours, plus inter-context conflict where two retrieved passages
+        disagree, and intra-memory conflict where the model contradicts itself across rephrasings of the
+        same question.
+      </p>
+
+      <p>
+        Researchers land on similar observations: retrieved context and the model's prior compete
+        as the answer is generated, and which one wins is not guaranteed. The early work leaned
+        pessimistic. Longpre et al. (2021) showed that when a retrieved document contradicts what a model
+        already believes, the model often clings to its own memory and overlooks the document, and argues that we should measure a model's tendency to hallucinate rather than read.
+      </p>
+
+      <p>
+        The more useful finding is that it depends, and what it depends on is something you can act on.
+        Xie et al. (2023), in a paper with the excellent title <em>Adaptive Chameleon or Stubborn
+        Sloth</em>, found two behaviors at once. Give a model coherent, convincing external evidence as
+        the only thing in front of it, and it will often follow that evidence even against its prior.
+        But let the context contain anything that agrees with what the model already believes, and a
+        strong confirmation bias kicks in: it leans back toward memory.
+      </p>
+
+      <p>
+        Maybe that fits our bug... or at least it's one reading of it. 9800/3, Leukemia NOS, is a
+        high-frequency, default-feeling code the model has seen constantly. If it leaned on that prior,
+        this is exactly where it would land, even with the right table cited beside it. The faithfulness
+        research runs straight through this: work like Zhou et al. (2023) and Shi et al. (2023) is about
+        whether an output is determined by the provided context or by the model's priors. A correct
+        citation next to a wrong value is the textbook unfaithful but attributed answer, and it is the
+        version most likely to slip past a reviewer.
+      </p>
+
+      <h2>Why this is dangerous: the citation buys trust</h2>
+
+      <p>
+        Fluent and wrong, we have all learned to be a little wary of. Cited and wrong is worse, because
+        the citation is the signal a careful person looks for to decide an answer can be trusted. A
+        reviewer who checks "is there a source, and is it the right document" finds both, and moves on.
+        The citation did persuasive work the answer had not earned. An experienced oncology data specialist here would have caught the 9800
+        against 9801; a newer one, or a downstream analyst trusting a clean and cited response, may not.
+        In regulated work, where a wrong code propagates into counts that feed real decisions, a
+        confident answer wearing a correct citation is the failure most likely to get waved through.
+      </p>
+
+      <p>
+        This is not a cancer-registry quirk, either. The same failure shows up anywhere the right answer
+        is a small value buried in a larger retrieved document: a statute number, an API parameter, a
+        medication dose, a tax rule, a product SKU. The model cites the right page and still reports the
+        wrong figure from it, and the citation makes nobody look twice.
+      </p>
+
+      <h2>What you can do about it</h2>
+
+      <p>
+        The cheapest lever is the prompt, and it is more powerful than its reputation. My change was
+        one line. I went from "consult the source where possible" to "always show the exact source
+        entry before answering, and never answer from memory when the source covers the question." Same
+        model, same corpus, and on this question, the right answer. I want to be honest about the scope
+        of that, though: it fixed the leukemia case only some of the time.. Tweaking the prompt is not a trick
+        I invented. Zhou et al. (2023) showed that targeted prompting, reframing the context as an
+        external statement the model must attend to, and letting it abstain, measurably improves how
+        faithfully models stick to provided context, with no retraining. Those gains seem to be
+        sensitive to exact wording, so you test the new prompt against cases, you do not assume it
+        worked.
+      </p>
+
+      <p>
+        And forcing the model to always defer to the source cuts both ways. The same Xie et al. paper
+        that explains our bug shows the opposite failure too: give a model coherent, convincing evidence
+        and it will often follow it, even when the evidence is wrong. So a hard "always trust the
+        retrieved passage" instruction trades a context-memory problem for an inter-context one. If
+        retrieval surfaces a stale or contradictory passage, you have now told the model to repeat it.
+        Grounding harder is not the same as grounding better, and which way you want the model to lean
+        depends on whether you trust your corpus more than the model's prior. For a curated coding table,
+        you probably do. For a messy document pile, maybe not.
+      </p>
+
+      <p>The prompt is the lever I happened to pull first, but it is not the one I would check first. Here is a fuller menu, roughly in the order I would actually work it:</p>
+
+      <ul>
+        <li><strong>Start upstream, with preprocessing.</strong> How a document gets chunked, embedded,
+        and formatted decides what retrieval can even return cleanly, and it is a very common cause of
+        exactly this kind of one-row-off error. Tables are a weak spot for RAG: a lookup table only
+        means something when the row and column stay aligned, and most chunkers flatten it into a run of
+        text, so adjacent entries blur and the tie between a term and its code can loosen. An Excel source
+        adds its own failure points in how the cells get serialized and where a chunk boundary lands. I am
+        on Microsoft Copilot, so a lot of this is handled for me, but handled is not the same as verified.
+        This is what I suspect in my own bug, and it is where I would start.</li>
+        <li><strong>Then retrieval itself.</strong> Make sure the right passage is actually coming back, and coming back near the top.
+          Most RAG systems only pass the model the top few results, so if the relevant chunk ranks low, the model never sees it.
+          In my case the document was retrieved and cited, so this was not the bottleneck, but for a lot of systems it is the first thing that is broken.</li>
+        <li><strong>Lean on the model at decoding time.</strong> Methods like context-aware
+        decoding (Shi et al., 2023) push the model to weight the retrieved context more heavily as it
+        generates.</li>
+      </ul>
+
+      <p>
+        In the spirit of working in the open: I have not yet worked these upstream pieces for my own
+        setup, the chunking strategy and how that Excel table is represented in particular. That is what I
+        am digging into over the next few weeks, and if I find something worth sharing I will update this
+        page or write a follow-up.
+      </p>
+
+      <p>
+        What strikes me looking back is that the guardrails we reached for by trial and error, mandatory
+        citations, confidence tags, a conservative default, and an instruction to say so when the source
+        does not cover the question, are the same inference-time levers this literature recommends. We
+        added them for their own sake, and it turned out they were the thing doing the grounding. With
+        one caveat the leukemia bug makes obvious: a mandatory citation makes a system feel safer to
+        audit, but only if you audit the right thing, the value, and not the fact that a citation showed
+        up.
+      </p>
+
+      <blockquote>
+        Do not test for the presence of a citation. Test whether the cited value is the one in the
+        source. A system that always cites looks trustworthy and can still be ungrounded on the part
+        that matters: the answer itself.
+      </blockquote>
+
+      <p>
+        That is the evaluation point that matters most here, and the one most demos skip. Do not only
+        check whether the final answer was correct, and do not let a citation reassure you. Concretely:
+        build a small gold set where each question has both the known correct code and the known source
+        span that contains it, then score two things separately, whether the answer is right, and
+        whether the cited span actually says what the answer claims. The presence of a source is not
+        evidence of grounding; agreement between the answer and the source is. Scoring them apart is
+        what surfaces the cited-but-wrong cases, because an accuracy-only metric will happily pass a
+        lucky guess that is right without being grounded.
+      </p>
+
+      <h2>The takeaway</h2>
+
+      <p>
+        RAG gives you the machinery for grounding. It does not give you grounding. A retrieved passage,
+        a vector store, even a correct citation, are the apparatus. Grounding is the property that the
+        answer's content is determined by the source, and that is a behavior you specify, test, and
+        monitor, not something you get for free by wiring up retrieval. Same lesson as the threshold in
+        the last piece: the model gives you capability, and the judgment about how to use it stays with
+        you.
+      </p>
+
+      <p>
+        Two threads I will pick up from here. First, how you actually know a system like this is any
+        good without fooling yourself, which is its own discipline. Second, the question sitting
+        underneath all of it: whether reaching for a generative model is even the right call for a given
+        job, when a smaller and more bounded approach is often the better one. More on both soon.
+      </p>
+
+      <h2>References and further reading</h2>
+      <ul class="refs-list">
+        <li>Xu, R., Qi, Z., Guo, Z., Wang, C., Wang, H., Zhang, Y., &amp; Xu, W. (2024). Knowledge Conflicts for LLMs: A Survey. <em>EMNLP 2024</em>. <a href="https://arxiv.org/abs/2403.08319" target="_blank" rel="noopener">arXiv:2403.08319</a></li>
+        <li>Longpre, S., Perisetla, K., Chen, A., Ramesh, N., DuBois, C., &amp; Singh, S. (2021). Entity-Based Knowledge Conflicts in Question Answering. <em>EMNLP 2021</em>. <a href="https://arxiv.org/abs/2109.05052" target="_blank" rel="noopener">arXiv:2109.05052</a></li>
+        <li>Xie, J., Zhang, K., Chen, J., Lou, R., &amp; Su, Y. (2023). Adaptive Chameleon or Stubborn Sloth: Revealing the Behavior of Large Language Models in Knowledge Conflicts. <em>ICLR 2024</em>. <a href="https://arxiv.org/abs/2305.13300" target="_blank" rel="noopener">arXiv:2305.13300</a></li>
+        <li>Zhou, W., Zhang, S., Poon, H., &amp; Chen, M. (2023). Context-faithful Prompting for Large Language Models. <em>Findings of EMNLP 2023</em>. <a href="https://arxiv.org/abs/2303.11315" target="_blank" rel="noopener">arXiv:2303.11315</a></li>
+        <li>Shi, W., Han, X., Lewis, M., Tsvetkov, Y., Zettlemoyer, L., &amp; Yih, S. (2023). Trusting Your Evidence: Hallucinate Less with Context-aware Decoding. <em>NAACL 2024</em>. <a href="https://arxiv.org/abs/2305.14739" target="_blank" rel="noopener">arXiv:2305.14739</a></li>
+      </ul>
+    </div>
+  </article>
+
+  <div class="article-foot">
+    <a class="textlink" href="../writing.html">&larr; Back to writing</a>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="site-footer__inner">
+    <div>
+      <div class="site-footer__name">Jonathan Simkin, PhD</div>
+      <div class="site-footer__meta">Data &amp; Analytics Leader &middot; Vancouver, BC</div>
+    </div>
+    <ul class="social">
+      <li><a href="mailto:jonathan.d.simkin@gmail.com"><span class="social__k">Email</span><span class="social__v">jonathan.d.simkin</span></a></li>
+      <li><a href="https://www.linkedin.com/in/jonathan-d-s" target="_blank" rel="noopener"><span class="social__k">LinkedIn</span><span class="social__v">in/jonathan-d-s</span></a></li>
+      <li><a href="https://github.com/jdsimkin04" target="_blank" rel="noopener"><span class="social__k">GitHub</span><span class="social__v">jdsimkin04</span></a></li>
+      <li><a href="https://scholar.google.ca/citations?user=SehfEC8AAAAJ" target="_blank" rel="noopener"><span class="social__k">Scholar</span><span class="social__v">Google Scholar</span></a></li>
+    </ul>
+  </div>
+</footer>
+
+<script src="../js/site.js"></script>
+<script>
+/* ============================================================
+   Knowledge-conflict demo, self-contained, no dependencies.
+   Same question, same cited source. Only the system prompt
+   changes, and with it whether the answer matches the source.
+   ============================================================ */
+(function(){
+  var STATES = {
+    permissive: {
+      prompt: 'Answer registry coding questions.\nRefer to the source documentation\nwhere possible.',
+      answerCode: '9800/3 \u00b7 Leukemia, NOS',
+      verdict: 'bad',
+      badge: 'Wrong',
+      note: 'The answer cites the correct table, which is the signal that makes it look grounded. But the value is wrong: the model returned 9800/3, Leukemia NOS, the more generic neighbor, rather than the 9801/3 entry the table lists for this exact term. It cited the right doc and picked the wrong line from it.',
+      mAns: '9800/3',
+      match: 'No'
+    },
+    strict: {
+      prompt: 'Answer registry coding questions.\nALWAYS show the exact source entry\nbefore answering. NEVER answer from\nmemory when the source covers it.',
+      answerCode: '9801/3 \u00b7 Acute leukemia, NOS',
+      verdict: 'good',
+      badge: 'Correct',
+      note: 'Same cited source. Now the answer matches it. Forcing the model to surface the exact entry before answering binds the value to the table it was already pointing at.',
+      mAns: '9801/3',
+      match: 'Yes'
+    }
+  };
+
+  var tabs = document.querySelectorAll('#kc-widget .kc-tab');
+  var promptEl = document.getElementById('kc-prompt');
+  var answerEl = document.getElementById('kc-answer');
+  var badgeEl = document.getElementById('kc-badge');
+  var codeEl = document.getElementById('kc-answer-code');
+  var noteEl = document.getElementById('kc-answer-note');
+  var mAnsEl = document.getElementById('kc-m-ans');
+  var mMatchEl = document.getElementById('kc-m-match');
+
+  function render(mode){
+    var s = STATES[mode];
+    promptEl.textContent = s.prompt;
+    answerEl.classList.remove('is-good','is-bad');
+    answerEl.classList.add(s.verdict === 'good' ? 'is-good' : 'is-bad');
+    badgeEl.textContent = s.badge;
+    badgeEl.className = 'kc-badge ' + (s.verdict === 'good' ? 'is-good' : 'is-bad');
+    codeEl.textContent = s.answerCode;
+    noteEl.textContent = s.note;
+    mAnsEl.textContent = s.mAns;
+    mAnsEl.className = 'metric__v ' + (s.verdict === 'good' ? 'is-good' : 'is-bad');
+    mMatchEl.textContent = s.match;
+    mMatchEl.className = 'metric__v ' + (s.verdict === 'good' ? 'is-good' : 'is-bad');
+    tabs.forEach(function(t){
+      var on = t.getAttribute('data-mode') === mode;
+      t.classList.toggle('is-active', on);
+      t.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+  }
+
+  tabs.forEach(function(t){
+    t.addEventListener('click', function(){ render(t.getAttribute('data-mode')); });
+  });
+
+  render('permissive');
+})();
+</script>
+</body>
+</html>
